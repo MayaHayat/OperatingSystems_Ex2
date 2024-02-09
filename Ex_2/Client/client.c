@@ -120,7 +120,7 @@ int main(int argc,char *argv[]) {
     struct sockaddr_in server_address_info;
     memset(&server_address_info, 0, sizeof(server_address_info));
     server_address_info.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, (char *)&server_address_info.sin_addr.s_addr, server->h_length);
+    bcopy((char *)server->h_addr_list, (char *)&server_address_info.sin_addr.s_addr, server->h_length);
     server_address_info.sin_port = htons(atoi(server_port));
 
     if (connect(client_socket, (struct sockaddr *)&server_address_info, sizeof(server_address_info)) < 0) {
