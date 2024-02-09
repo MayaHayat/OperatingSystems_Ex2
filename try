@@ -2,11 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <ctype.h>
 
+#define PORT 8080
 #define BUFFER_SIZE 1024
-#define PATH_SIZE 256
+#define MAX_CLIENTS 5
 
 // Function to handle GET requests
 void handle_get(int client_socket, char *path) {
@@ -47,95 +54,84 @@ void handle_post(int client_socket, char *path, char *data) {
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
-        printf("Usage: %s <root_directory>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <root_directory>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    int server_socket;
-    int client_socket;
-    struct sockaddr_in server_address;
-    struct sockaddr_in client_address;
-    socklen_t client_address_len;
+    int server_socket, new_socket, valread;
+    struct sockaddr_in server_address, client_address;
+    int addrlen = sizeof(server_address);
+    char buffer[BUFFER_SIZE] = {0};
 
     // Create socket
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket == -1) {
-        perror("Error creating socket");
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Initialize server address
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = INADDR_ANY;
-    server_address.sin_port = htons(8080);
+    server_address.sin_port = htons(PORT);
 
     // Bind socket
-    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) == -1) {
-        perror("Error binding socket");
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+        perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
-    // Listen for connections
-    if (listen(server_socket, 5) == -1) {
-        perror("Error listening");
+    // Listen
+    if (listen(server_socket, MAX_CLIENTS) < 0) {
+        perror("Listen failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("Server listening on port 8080...\n");
-
+    // Accept incoming connections
     while (1) {
-        // Accept incoming connection
-        client_address_len = sizeof(client_address);
-        client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len);
-        if (client_socket == -1) {
-            perror("Error accepting connection");
-            continue;
+        if ((new_socket = accept(server_socket, (struct sockaddr *)&client_address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept failed");
+            exit(EXIT_FAILURE);
         }
 
         printf("Connection accepted from %s:%d\n", inet_ntoa(client_address.sin_addr), ntohs(client_address.sin_port));
 
-        // Fork a child process
         pid_t child_pid = fork();
 
         if (child_pid == -1) {
             perror("Error forking process");
-            close(client_socket);
+            close(new_socket);
             continue;
         }
 
         if (child_pid == 0) {
             // Child process
             close(server_socket); // Close server socket in child process
-            
-            usleep(10000);
 
             // Receive request
-            char request[BUFFER_SIZE];
-            ssize_t bytes_received = recv(client_socket, request, BUFFER_SIZE, 0);
-            if (bytes_received == -1) {
+            valread = recv(new_socket, buffer, BUFFER_SIZE, 0);
+            if (valread < 0) {
                 perror("Error receiving request");
-                close(client_socket);
+                close(new_socket);
                 exit(EXIT_FAILURE);
             }
 
             // Extract method and path from request
             char method[10], path[1000], data[1000];
-            sscanf(request, "%s %s %s", method, path, data);
+            sscanf(buffer, "%s %s %s", method, path, data);
 
             // Handle request
             if (strcmp(method, "GET") == 0) {
-                handle_get(client_socket, path);
+                handle_get(new_socket, path);
             } else if (strcmp(method, "POST") == 0) {
-                handle_post(client_socket, path, data);
+                handle_post(new_socket, path, data);
             }
 
             // Close connection
-            close(client_socket);
+            close(new_socket);
             printf("Connection closed\n");
             exit(EXIT_SUCCESS); // Terminate child process
         } else {
             // Parent process
-            close(client_socket); // Close client socket in parent process
+            close(new_socket); // Close client socket in parent process
         }
     }
 
