@@ -1,0 +1,161 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+
+#define MAX_BUFFER_SIZE 2048
+#define PATH_SIZE 256
+
+void handle_get(int client_socket, const char *root_directory, const char *remote_path) {
+    char file_path[PATH_SIZE];
+    snprintf(file_path, PATH_SIZE, "%s%s", root_directory, remote_path);
+    FILE *file = fopen(file_path, "rb");
+    if (file == NULL) {
+        // File not found, send 404 response
+        char response[] = "404 FILE NOT FOUND\r\n\r\n";
+        send(client_socket, response, strlen(response), 0);
+    } else {
+        // File found, send 200 OK response
+        char response[] = "200 OK\r\n";
+        send(client_socket, response, strlen(response), 0);
+        
+        // Read file contents and send to client
+        char buffer[MAX_BUFFER_SIZE];
+        size_t bytes_read;
+        while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+            send(client_socket, buffer, bytes_read, 0);
+        }
+        
+        fclose(file);
+    }
+}
+
+void handle_post(int client_socket, const char *root_directory, const char *remote_path, const char *data) {
+    char file_path[PATH_SIZE];
+    snprintf(file_path, PATH_SIZE, "%s%s", root_directory, remote_path);
+    FILE *file = fopen(file_path, "wb");
+    if (file == NULL) {
+        // Error opening file, send 500 response
+        char response[] = "500 INTERNAL ERROR\r\n\r\n";
+        send(client_socket, response, strlen(response), 0);
+    } else {
+        // Decode base64 data
+        char *decoded_data = base64_decode(data);
+
+        // Write decoded data to file
+        fwrite(decoded_data, 1, strlen(decoded_data), file);
+        fclose(file);
+
+        // Send 200 OK response
+        char response[] = "200 OK\r\n\r\n";
+        send(client_socket, response, strlen(response), 0);
+
+        // Free allocated memory for decoded data
+        free(decoded_data);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        printf("Usage: %s <root_directory>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    const char *root_directory = argv[1];
+
+    int server_socket, client_socket;
+    struct sockaddr_in server_address, client_address;
+    socklen_t client_address_len;
+
+    // Create socket
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0) {
+        perror("Error creating socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Initialize server address
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = INADDR_ANY;
+    server_address.sin_port = htons(8080);
+
+    // Bind socket
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+        perror("Error binding socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for connections
+    if (listen(server_socket, 5) < 0) {
+        perror("Error listening");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port 8080...\n");
+
+    while (1) {
+        // Accept incoming connection
+        client_address_len = sizeof(client_address);
+        client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len);
+        if (client_socket < 0) {
+            perror("Error accepting connection");
+            continue;
+        }
+
+        printf("Connection accepted from %s:%d\n", inet_ntoa(client_address.sin_addr), ntohs(client_address.sin_port));
+
+        // Fork a child process
+        pid_t child_pid = fork();
+
+        if (child_pid == -1) {
+            perror("Error forking process");
+            close(client_socket);
+            continue;
+        }
+
+        if (child_pid == 0) {
+            // Child process
+            close(server_socket); // Close server socket in child process
+
+            usleep(10000); // Small delay for stability
+
+            // Receive request
+            char request[MAX_BUFFER_SIZE];
+            ssize_t bytes_received = recv(client_socket, request, sizeof(request), 0);
+            if (bytes_received < 0) {
+                perror("Error receiving request");
+                close(client_socket);
+                exit(EXIT_FAILURE);
+            }
+
+            // Parse request
+            char method[5], remote_path[PATH_SIZE], data[MAX_BUFFER_SIZE];
+            sscanf(request, "%s %s %[^\r\n]", method, remote_path, data);
+
+            // Handle request
+            if (strcmp(method, "GET") == 0) {
+                handle_get(client_socket, root_directory, remote_path);
+            } else if (strcmp(method, "POST") == 0) {
+                handle_post(client_socket, root_directory, remote_path, data);
+            }
+
+            // Close connection
+            close(client_socket);
+            printf("Connection closed\n");
+            exit(EXIT_SUCCESS); // Terminate child process
+        } else {
+            // Parent process
+            close(client_socket); // Close client socket in parent process
+        }
+    }
+
+    close(server_socket);
+
+    return 0;
+}
