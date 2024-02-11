@@ -1,141 +1,130 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/wait.h>
-#include <ctype.h>
-
-#define PORT 8080
-#define BUFFER_SIZE 1024
-#define MAX_CLIENTS 5
-
-// Function to handle GET requests
-void handle_get(int client_socket, char *path) {
-    FILE *file = fopen(path, "rb");
+void handle_get_request(int client_socket, const char *full_path) {
+    FILE *file = fopen(full_path, "rb");
     if (file == NULL) {
-        // File not found, send 404 response
-        send(client_socket, "404 FILE NOT FOUND\r\n\r\n", strlen("404 FILE NOT FOUND\r\n\r\n"), 0);
+        // File not found
+        send_response(client_socket, "404 Not Found\r\n\r\n");
     } else {
-        // File found, send 200 OK response
-        send(client_socket, "200 OK\r\n", strlen("200 OK\r\n"), 0);
-        
-        // Read file contents
-        char buffer[BUFFER_SIZE];
+        // Read and send the file content
+        send_response(client_socket, "200 OK\r\n");
+
+        char file_buffer[MAX_BUFFER_SIZE];
         size_t bytes_read;
-        while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-            send(client_socket, buffer, bytes_read, 0);
+
+        while ((bytes_read = fread(file_buffer, 1, sizeof(file_buffer), file)) > 0) {
+            send(client_socket, file_buffer, bytes_read, 0);
+            printf("sending %s",file_buffer);
         }
-        
+        send_response(client_socket, "\r\n\r\n");
+
         fclose(file);
     }
 }
 
-// Function to handle POST requests
-void handle_post(int client_socket, char *path, char *data) {
-    FILE *file = fopen(path, "wb");
-    if (file == NULL) {
-        // Error opening file, send 500 response
-        send(client_socket, "500 INTERNAL ERROR\r\n\r\n", strlen("500 INTERNAL ERROR\r\n\r\n"), 0);
-    } else {
-        // Write data to file
-        fwrite(data, strlen(data), 1, file);
-        fclose(file);
-        
-        // Send 200 OK response
-        send(client_socket, "200 OK\r\n\r\n", strlen("200 OK\r\n\r\n"), 0);
-    }
-}
+void handle_post_request(int client_socket, const char *full_path) {
+    // Attempt to lock the file for writing
+    struct flock lock;
+    lock.l_type = F_WRLCK;  // Exclusive write lock
+    lock.l_whence = SEEK_SET;
+    lock.l_start = 0;
+    lock.l_len = 0;
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <root_directory>\n", argv[0]);
+    int file_fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (file_fd < 0) {
+        perror("Error opening file");
+        send_response(client_socket, "500 INTERNAL ERROR\r\n\r\n");
+        close(client_socket);
         exit(EXIT_FAILURE);
     }
 
-    int server_socket, new_socket, valread;
-    struct sockaddr_in server_address, client_address;
-    int addrlen = sizeof(server_address);
-    char buffer[BUFFER_SIZE] = {0};
-
-    // Create socket
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Socket creation failed");
+    // Attempt to acquire the lock
+    if (fcntl(file_fd, F_SETLK, &lock) == -1) {
+        perror("Error acquiring lock");
+        close(file_fd);
+        send_response(client_socket, "500 INTERNAL ERROR\r\n\r\n");
+        close(client_socket);
         exit(EXIT_FAILURE);
     }
 
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
-    server_address.sin_port = htons(PORT);
+    // Continue tokenizing and writing to file
+    char buffer[MAX_BUFFER_SIZE];
+    ssize_t bytes_received;
 
-    // Bind socket
-    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Listen
-    if (listen(server_socket, MAX_CLIENTS) < 0) {
-        perror("Listen failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Accept incoming connections
     while (1) {
-        if ((new_socket = accept(server_socket, (struct sockaddr *)&client_address, (socklen_t*)&addrlen)) < 0) {
-            perror("Accept failed");
+        bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+        if (bytes_received <= 0) {
+            break;
+        }
+        if (write(file_fd, buffer, bytes_received) < 0) {
+            perror("Error writing to file");
+            close(file_fd);
+            close(client_socket);
             exit(EXIT_FAILURE);
         }
-
-        printf("Connection accepted from %s:%d\n", inet_ntoa(client_address.sin_addr), ntohs(client_address.sin_port));
-
-        pid_t child_pid = fork();
-
-        if (child_pid == -1) {
-            perror("Error forking process");
-            close(new_socket);
-            continue;
-        }
-
-        if (child_pid == 0) {
-            // Child process
-            close(server_socket); // Close server socket in child process
-
-            // Receive request
-            valread = recv(new_socket, buffer, BUFFER_SIZE, 0);
-            if (valread < 0) {
-                perror("Error receiving request");
-                close(new_socket);
-                exit(EXIT_FAILURE);
-            }
-
-            // Extract method and path from request
-            char method[10], path[1000], data[1000];
-            sscanf(buffer, "%s %s %s", method, path, data);
-
-            // Handle request
-            if (strcmp(method, "GET") == 0) {
-                handle_get(new_socket, path);
-            } else if (strcmp(method, "POST") == 0) {
-                handle_post(new_socket, path, data);
-            }
-
-            // Close connection
-            close(new_socket);
-            printf("Connection closed\n");
-            exit(EXIT_SUCCESS); // Terminate child process
-        } else {
-            // Parent process
-            close(new_socket); // Close client socket in parent process
-        }
     }
 
-    close(server_socket);
+    printf("Finished writing to file\n");
+    fflush(stdout);
 
-    return 0;
+    // Release the lock
+    lock.l_type = F_UNLCK;
+    if (fcntl(file_fd, F_SETLK, &lock) == -1) {
+        perror("Error releasing lock");
+        close(file_fd);
+        close(client_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    close(file_fd);
+
+    // Send response to the client
+    send_response(client_socket, "200 OK\r\n\r\n");
+}
+
+void handle_client(int client_socket, char *root_dir) {
+    char buffer[MAX_BUFFER_SIZE];
+    ssize_t bytes_received;
+
+    usleep(70000);
+
+    // Receive the request from the client
+    bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+    if (bytes_received < 0) {
+        perror("Error receiving request");
+        close(client_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("buffer contains <<<<%.*s>>>>\n", (int)bytes_received, buffer);
+
+
+    // Tokenize the request based on "\r\n"
+    char *token;
+    char *method, *path;
+    token = strtok(buffer, "\r\n");
+
+
+    // Extract method and path
+    if (token != NULL) {
+        sscanf(token, "%ms %ms", &method, &path);
+    } else {
+        // Handle invalid request
+        send_response(client_socket, "400 Bad Request\r\n\r\n");
+        close(client_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    char full_path[MAX_PATH_SIZE];
+    snprintf(full_path, sizeof(full_path), "%s%s", root_dir, path);
+
+    if (strcmp(method, "GET") == 0) {
+        handle_get_request(client_socket, full_path);
+    } else if (strcmp(method, "POST") == 0) {
+        handle_post_request(client_socket, full_path);
+    }
+
+    // Cleanup
+    free(method);
+    free(path);
+    close(client_socket);
+    exit(EXIT_SUCCESS);
 }
