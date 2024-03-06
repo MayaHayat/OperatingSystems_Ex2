@@ -15,6 +15,21 @@ void handle_get(int client_socket, char *path) {
     if (!file) {
         send(client_socket, "404 FILE NOT FOUND\r\n\r\n", strlen("404 FILE NOT FOUND\r\n\r\n"), 0);
     } else {
+        // Lock the file for reading
+        struct flock lock;
+        lock.l_type = F_RDLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_start = 0;
+        lock.l_len = 0;
+
+        if (fcntl(fileno(file), F_SETLK, &lock) == -1) {
+            perror("Error locking file");
+            fclose(file);
+            send(client_socket, "500 INTERNAL ERROR\r\n\r\n", strlen("500 INTERNAL ERROR\r\n\r\n"), 0);
+            close(client_socket);
+            exit(1);
+        }
+
         send(client_socket, "200 OK\r\n", strlen("200 OK\r\n"), 0);
         
         char buffer[BUFFER_SIZE];
@@ -24,11 +39,18 @@ void handle_get(int client_socket, char *path) {
             printf("Client requested get -> sending\n");
         }
         
+        // Unlock the file after reading
+        lock.l_type = F_UNLCK;
+        if (fcntl(fileno(file), F_SETLK, &lock) == -1) {
+            perror("Error unlocking file");
+            fclose(file);
+            close(client_socket);
+            exit(1);
+        }
+
         fclose(file);
     }
 }
-
-
 
 void handle_post(int client_socket, const char *full_path, char* token) {
     struct flock lock;
@@ -39,15 +61,15 @@ void handle_post(int client_socket, const char *full_path, char* token) {
 
     FILE *file = fopen(full_path, "w");
     if (!file) {
-        perror("Error opening file");
+        perror("File won't open");
         send(client_socket, "500 INTERNAL ERROR\r\n\r\n", strlen("500 INTERNAL ERROR\r\n\r\n"), 0);
         close(client_socket);
         exit(1);
     }
 
-    // Trying to lock file
+    // Lock the file for writing
     if (fcntl(fileno(file), F_SETLK, &lock) == -1) {
-        perror("Error locking file");
+        perror("File won't open");
         fclose(file);
         send(client_socket, "500 INTERNAL ERROR\r\n\r\n", strlen("500 INTERNAL ERROR\r\n\r\n"), 0);
         close(client_socket);
@@ -65,10 +87,10 @@ void handle_post(int client_socket, const char *full_path, char* token) {
     printf("Finished writing to file\n");
     fflush(stdout);
 
-    // Try unlocking the file
+    // Unlock the file after writing
     lock.l_type = F_UNLCK;
     if (fcntl(fileno(file), F_SETLK, &lock) == -1) {
-        perror("Error unlocking");
+        perror("Error unlocking file");
         fclose(file);
         close(client_socket);
         exit(1);
@@ -78,7 +100,6 @@ void handle_post(int client_socket, const char *full_path, char* token) {
 
     send(client_socket, "200 OK\r\n\r\n", strlen("200 OK\r\n\r\n"), 0);
 }
-
 
 
 
