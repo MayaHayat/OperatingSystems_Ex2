@@ -79,14 +79,14 @@ int handle_download(char* path2list, int client_socket) {
 
 
 int handle_select(int *sockets, char **file_array, int num_files) {
-    fd_set read_fds;
+    fd_set readfdss;
     // Reset so we won't have random numbers
-    FD_ZERO(&read_fds); 
+    FD_ZERO(&readfdss); 
     int fdmax = 0;
 
     for (int i = 0; i < num_files; i++) {
         // Add the socket to the file desctiptor list
-        FD_SET(sockets[i], &read_fds);
+        FD_SET(sockets[i], &readfdss);
         if (sockets[i] > fdmax) {
             fdmax = sockets[i];
         }
@@ -96,20 +96,19 @@ int handle_select(int *sockets, char **file_array, int num_files) {
     usleep(700000);
     
 
-    if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+    if (select(fdmax + 1, &readfdss, NULL, NULL, NULL) == -1) {
         perror("select");
         return -1;
     }
 
     for (int i = 0; i < num_files; i++) {
-    if (FD_ISSET(sockets[i], &read_fds)) {
-        if (file_array[i]) {
+        if (FD_ISSET(sockets[i], &readfdss)) {
             int ans = handle_download(file_array[i], sockets[i]);
             if (ans == -1) {
                 fprintf(stderr, "Couldn't download file %s\n", file_array[i]);
+            
+                }
             }
-        }
-    }
     }
     printf("\n%d files were downloaded from server!\nGoodbye :)\n", num_files);
     return 0;
@@ -211,7 +210,6 @@ int main(int argc, char *argv[]) {
 
         // copy path2list 
         snprintf(path2list, strlen(CLIENT_FILES) + strlen(mylist) + 1, "%s%s",CLIENT_FILES, mylist);
-        //printf("Path to list: %s\n", path2list);
 
         char request[BUFFER_SIZE];
         snprintf(request, sizeof(request), "GET /Downloads/%s \r\n\r\n", mylist);
