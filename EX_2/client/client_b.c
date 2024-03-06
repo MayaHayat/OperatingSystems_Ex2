@@ -99,6 +99,7 @@ int handle_select(int *sockets, char **file_array, int num_files) {
     if (select(fdmax + 1, &readfdss, NULL, NULL, NULL) == -1) {
         perror("select");
         return -1;
+        
     }
 
     for (int i = 0; i < num_files; i++) {
@@ -197,10 +198,16 @@ int main(int argc, char *argv[]) {
     }
 
     if (ends_with(mylist, ".list") == -1) {
+        char request[BUFFER_SIZE];
+        snprintf(request, sizeof(request), "GET /Downloads/%s \r\n\r\n", mylist);
+        send(client_socket, request, strlen(request),0);
+
         int ans = handle_download(mylist, client_socket);
         if (ans == -1){
             perror("Couldn't download file...");
         }
+
+
     } else {
         char *path2list = malloc(strlen(CLIENT_FILES) + strlen(mylist) + 1);
         if (!path2list) {
