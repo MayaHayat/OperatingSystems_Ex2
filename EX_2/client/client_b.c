@@ -199,7 +199,7 @@ int main(int argc, char *argv[]) {
 
     if (ends_with(mylist, ".list") == -1) {
         char request[BUFFER_SIZE];
-        snprintf(request, sizeof(request), "GET /Downloads/%s \r\n\r\n", mylist);
+        snprintf(request, sizeof(request), "GET /serverFiles/%s \r\n\r\n", mylist);
         send(client_socket, request, strlen(request),0);
 
         int ans = handle_download(mylist, client_socket);
@@ -219,7 +219,7 @@ int main(int argc, char *argv[]) {
         snprintf(path2list, strlen(CLIENT_FILES) + strlen(mylist) + 1, "%s%s",CLIENT_FILES, mylist);
 
         char request[BUFFER_SIZE];
-        snprintf(request, sizeof(request), "GET /Downloads/%s \r\n\r\n", mylist);
+        snprintf(request, sizeof(request), "GET /serverFiles/%s \r\n\r\n", mylist);
 
         // sending request to server with Get (so server can handle it as implemented)
         send(client_socket, request, strlen(request),0);
@@ -280,7 +280,7 @@ int main(int argc, char *argv[]) {
 
             for (int i = 0; i < num_files; i++) {
                 char request[BUFFER_SIZE];
-                snprintf(request, sizeof(request), "GET /Downloads/%s \r\n\r\n", file_array[i]);
+                snprintf(request, sizeof(request), "GET /serverFiles/%s \r\n\r\n", file_array[i]);
                 // Send a request to get each file seperatly from server
                 send(sockets[i], request, strlen(request),0);
             }
